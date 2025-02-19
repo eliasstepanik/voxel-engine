@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use bevy_egui::EguiSet;
+use bevy_render::extract_resource::ExtractResourcePlugin;
 use crate::helper::debug_gizmos::debug_gizmos;
 use crate::helper::egui_dock::{reset_camera_viewport, set_camera_viewport, set_gizmo_mode, show_ui_system, UiState};
-use crate::helper::large_transform::DoubleTransform;
 
 pub struct AppPlugin;
 
@@ -26,7 +26,6 @@ impl Plugin for AppPlugin {
         app.add_plugins(crate::plugins::ui_plugin::UiPlugin);
 
         app.add_plugins(crate::plugins::environment_plugin::EnvironmentPlugin);
-        app.add_plugins(crate::plugins::large_transform_plugin::LargeTransformPlugin);
 
 
 
@@ -50,7 +49,6 @@ impl Plugin for AppPlugin {
         app.add_systems(Update, set_gizmo_mode);
         app.register_type::<Option<Handle<Image>>>();
         app.register_type::<AlphaMode>();
-        app.register_type::<DoubleTransform>();
     }
 
 

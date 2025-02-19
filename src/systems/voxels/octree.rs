@@ -5,12 +5,11 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::render::render_asset::RenderAssetUsages;
-use crate::helper::large_transform::DoubleTransform;
-use crate::systems::voxels::structure::{ChunkEntities, OctreeNode, Ray, SparseVoxelOctree, Voxel, AABB, CHUNK_BUILD_BUDGET, CHUNK_NEIGHBOR_OFFSETS, CHUNK_RENDER_DISTANCE, NEIGHBOR_OFFSETS};
+use crate::systems::voxels::structure::{OctreeNode, Ray, SparseVoxelOctree, Voxel, AABB, NEIGHBOR_OFFSETS};
 
 impl SparseVoxelOctree {
     /// Creates a new octree with the specified max depth, size, and wireframe visibility.
-    pub fn new(max_depth: u32, size: f64, show_wireframe: bool, show_world_grid: bool, show_chunks: bool) -> Self {
+    pub fn new(max_depth: u32, size: f32, show_wireframe: bool, show_world_grid: bool, show_chunks: bool) -> Self {
         Self {
             root: OctreeNode::new(),
             max_depth,
@@ -18,11 +17,11 @@ impl SparseVoxelOctree {
             show_wireframe,
             show_world_grid,
             show_chunks,
-            dirty_chunks: HashSet::new(),
+            dirty: true,
         }
     }
 
-    pub fn insert(&mut self, world_x: f64, world_y: f64, world_z: f64, voxel: Voxel) {
+    pub fn insert(&mut self, world_x: f32, world_y: f32, world_z: f32, voxel: Voxel) {
         // Normalize the world coordinates to the nearest voxel grid position
         let (aligned_x, aligned_y, aligned_z) = self.normalize_to_voxel_at_depth(world_x, world_y, world_z, self.max_depth);
 
@@ -41,21 +40,13 @@ impl SparseVoxelOctree {
         voxel_with_position.position = Vec3::new(world_x as f32, world_y as f32, world_z as f32);
         
 
-        // Actually let's do a small helper:
-        let (cx, cy, cz) = self.compute_chunk_coords(world_x, world_y, world_z);
-        self.dirty_chunks.insert((cx as i32, cy as i32, cz as i32));
-
-        // 5b) Also mark the 6 neighboring chunks dirty to fix boundary faces
-        for &(nx, ny, nz) in CHUNK_NEIGHBOR_OFFSETS.iter() {
-            let neighbor_coord = (cx as i32 + nx, cy as i32  + ny, cz as i32  + nz);
-            self.dirty_chunks.insert(neighbor_coord);
-        }
+        self.dirty = true;
 
 
         SparseVoxelOctree::insert_recursive(&mut self.root, normalized_x, normalized_y, normalized_z, voxel_with_position, self.max_depth);
     }
 
-    fn insert_recursive(node: &mut OctreeNode, x: f64, y: f64, z: f64, voxel: Voxel, depth: u32) {
+    fn insert_recursive(node: &mut OctreeNode, x: f32, y: f32, z: f32, voxel: Voxel, depth: u32) {
         if depth == 0 {
             node.voxel = Some(voxel);
             node.is_leaf = true;
@@ -72,7 +63,7 @@ impl SparseVoxelOctree {
         }
 
         if let Some(ref mut children) = node.children {
-            let adjust_coord = |coord: f64| {
+            let adjust_coord = |coord: f32| {
                 if coord >= 0.5 - epsilon {
                     (coord - 0.5) * 2.0
                 } else {
@@ -83,7 +74,7 @@ impl SparseVoxelOctree {
         }
     }
 
-    pub fn remove(&mut self, world_x: f64, world_y: f64, world_z: f64) {
+    pub fn remove(&mut self, world_x: f32, world_y: f32, world_z: f32) {
         // Normalize the world coordinates to the nearest voxel grid position
         let (aligned_x, aligned_y, aligned_z) =
             self.normalize_to_voxel_at_depth(world_x, world_y, world_z, self.max_depth);
@@ -93,21 +84,14 @@ impl SparseVoxelOctree {
         let normalized_y = (aligned_y + (self.size / 2.0)) / self.size;
         let normalized_z = (aligned_z + (self.size / 2.0)) / self.size;
 
-        // figure out chunk coords for the removed voxel:
-        let (cx, cy, cz) = self.compute_chunk_coords(world_x, world_y, world_z);
-        self.dirty_chunks.insert((cx as i32, cy as i32, cz as i32));
-
-        for &(nx, ny, nz) in CHUNK_NEIGHBOR_OFFSETS.iter() {
-            let neighbor_coord = (cx as i32  + nx, cy as i32  + ny, cz as i32  + nz);
-            self.dirty_chunks.insert(neighbor_coord);
-        }
+        self.dirty = true;
 
 
         // Call the recursive remove function
         Self::remove_recursive(&mut self.root, normalized_x, normalized_y, normalized_z, self.max_depth);
     }
 
-    fn remove_recursive(node: &mut OctreeNode, x: f64, y: f64, z: f64, depth: u32) -> bool {
+    fn remove_recursive(node: &mut OctreeNode, x: f32, y: f32, z: f32, depth: u32) -> bool {
         if depth == 0 {
             // This is the leaf node where the voxel should be
             if node.voxel.is_some() {
@@ -131,7 +115,7 @@ impl SparseVoxelOctree {
             + ((y >= 0.5 - epsilon) as usize * 2)
             + ((z >= 0.5 - epsilon) as usize * 4);
 
-        let adjust_coord = |coord: f64| {
+        let adjust_coord = |coord: f32| {
             if coord >= 0.5 - epsilon {
                 (coord - 0.5) * 2.0
             } else {
@@ -169,7 +153,7 @@ impl SparseVoxelOctree {
     }
 
 
-    fn expand_root(&mut self, x: f64, y: f64, z: f64) {
+    fn expand_root(&mut self, x: f32, y: f32, z: f32) {
         let new_size = self.size * 2.0;
         let new_depth = self.max_depth + 1;
 
@@ -252,15 +236,15 @@ impl SparseVoxelOctree {
 
 
     /// Retrieves a reference to the voxel at the given normalized coordinates and depth, if it exists.
-    pub fn get_voxel_at(&self, x: f64, y: f64, z: f64) -> Option<&Voxel> {
+    pub fn get_voxel_at(&self, x: f32, y: f32, z: f32) -> Option<&Voxel> {
         Self::get_voxel_recursive(&self.root, x, y, z)
     }
 
     fn get_voxel_recursive(
         node: &OctreeNode,
-        x: f64,
-        y: f64,
-        z: f64,
+        x: f32,
+        y: f32,
+        z: f32,
     ) -> Option<&Voxel> {
         if node.is_leaf {
             return node.voxel.as_ref();
@@ -272,7 +256,7 @@ impl SparseVoxelOctree {
                 + ((y >= 0.5 - epsilon) as usize * 2)
                 + ((z >= 0.5 - epsilon) as usize * 4);
 
-            let adjust_coord = |coord: f64| {
+            let adjust_coord = |coord: f32| {
                 if coord >= 0.5 - epsilon {
                     (coord - 0.5) * 2.0
                 } else {
@@ -295,9 +279,9 @@ impl SparseVoxelOctree {
     /// The offsets are directions (-1, 0, 1) for x, y, z.
     pub fn has_neighbor(
         &self,
-        world_x: f64,
-        world_y: f64,
-        world_z: f64,
+        world_x: f32,
+        world_y: f32,
+        world_z: f32,
         offset_x: i32,
         offset_y: i32,
         offset_z: i32,
@@ -311,9 +295,9 @@ impl SparseVoxelOctree {
         let voxel_size = self.get_spacing_at_depth(depth);
 
         // Calculate the neighbor's world position
-        let neighbor_x = aligned_x + (offset_x as f64) * voxel_size;
-        let neighbor_y = aligned_y + (offset_y as f64) * voxel_size;
-        let neighbor_z = aligned_z + (offset_z as f64) * voxel_size;
+        let neighbor_x = aligned_x + (offset_x as f32) * voxel_size;
+        let neighbor_y = aligned_y + (offset_y as f32) * voxel_size;
+        let neighbor_z = aligned_z + (offset_z as f32) * voxel_size;
 
         // Check if the neighbor position is within bounds
         if !self.contains(neighbor_x, neighbor_y, neighbor_z) {
@@ -327,7 +311,7 @@ impl SparseVoxelOctree {
 
 
     /// Performs a raycast against the octree and returns the first intersected voxel.
-    pub fn raycast(&self, ray: &Ray) -> Option<(f64, f64, f64, u32, Vec3)> {
+    pub fn raycast(&self, ray: &Ray) -> Option<(f32, f32, f32, u32, Vec3)> {
         // Start from the root node
         let half_size = self.size / 2.0;
         let root_bounds = AABB {
@@ -348,7 +332,7 @@ impl SparseVoxelOctree {
         ray: &Ray,
         bounds: &AABB,
         depth: u32,
-    ) -> Option<(f64, f64, f64, u32, Vec3)> {
+    ) -> Option<(f32, f32, f32, u32, Vec3)> {
         // Check if the ray intersects this node's bounding box
         if let Some((t_enter, _, normal)) = self.ray_intersects_aabb_with_normal(ray, bounds) {
             // If this is a leaf node and contains a voxel, return it
@@ -358,9 +342,9 @@ impl SparseVoxelOctree {
 
                 // Return the hit position along with depth and normal
                 return Some((
-                    hit_position.x as f64,
-                    hit_position.y as f64,
-                    hit_position.z as f64,
+                    hit_position.x as f32,
+                    hit_position.y as f32,
+                    hit_position.z as f32,
                     depth,
                     normal,
                 ));

@@ -1,19 +1,17 @@
-// Chunk Rendering
-
-use bevy::math::{DQuat, DVec3};
+use std::collections::HashMap;
+use bevy::color::palettes::basic::BLUE;
 use bevy::prelude::*;
-use bevy::utils::info;
 use bevy_asset::RenderAssetUsages;
 use bevy_render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
-use crate::helper::large_transform::{DoubleTransform, WorldOffset};
-use crate::systems::voxels::structure::{ChunkEntities, ChunkMarker, SparseVoxelOctree, CHUNK_BUILD_BUDGET, CHUNK_RENDER_DISTANCE, NEIGHBOR_OFFSETS};
-use crate::helper::large_transform::get_true_world_position;
-use crate::systems::voxels::helper::face_orientation;
+use crate::systems::ui_system::SpeedDisplay;
+use crate::systems::voxels::structure::{SparseVoxelOctree, NEIGHBOR_OFFSETS};
 
-/*pub fn render(
+
+
+pub fn render(
     mut commands: Commands,
     mut query: Query<&mut SparseVoxelOctree>,
-    mut octree_transform_query: Query<&DoubleTransform, With<SparseVoxelOctree>>,
+    octree_transform_query: Query<&Transform, With<SparseVoxelOctree>>,
     render_object_query: Query<Entity, With<VoxelTerrainMarker>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -29,7 +27,7 @@ use crate::systems::voxels::helper::face_orientation;
 
 
         // Handle updates to the octree only if it is marked as dirty
-        if !octree.dirty_chunks.is_empty() {
+        if octree.dirty {
             // Clear existing render objects
             for entity in render_object_query.iter() {
                 commands.entity(entity).despawn();
@@ -41,19 +39,19 @@ use crate::systems::voxels::helper::face_orientation;
             let mut voxel_meshes = Vec::new();
 
             for (x, y, z, _color, depth) in voxels {
-                let voxel_size = octree.get_spacing_at_depth(depth) as f32;
+                let voxel_size = octree.get_spacing_at_depth(depth);
 
                 // Calculate the world position of the voxel
                 let world_position = Vec3::new(
-                    (x * octree.size as f32) + (voxel_size / 2.0) - (octree.size / 2.0) as f32,
-                    (y * octree.size as f32) + (voxel_size / 2.0) - (octree.size / 2.0) as f32,
-                    (z * octree.size as f32) + (voxel_size / 2.0) - (octree.size / 2.0) as f32,
+                    (x * octree.size) + (voxel_size / 2.0) - (octree.size / 2.0),
+                    (y * octree.size) + (voxel_size / 2.0) - (octree.size / 2.0),
+                    (z * octree.size) + (voxel_size / 2.0) - (octree.size / 2.0),
                 );
 
-                // Convert world_position components to f64 for neighbor checking
-                let world_x = world_position.x as f64;
-                let world_y = world_position.y as f64;
-                let world_z = world_position.z as f64;
+                // Convert world_position components to f32 for neighbor checking
+                let world_x = world_position.x;
+                let world_y = world_position.y;
+                let world_z = world_position.z;
 
                 // Iterate over all possible neighbor offsets
                 for &(dx, dy, dz) in NEIGHBOR_OFFSETS.iter() {
@@ -113,351 +111,22 @@ use crate::systems::voxels::helper::face_orientation;
                         base_color: Color::srgb(0.8, 0.7, 0.6),
                         ..Default::default()
                     })),
-                    transform: Default::default(),
+                    transform: *octree_transform_query.single(),
                     ..Default::default()
                 },
                 VoxelTerrainMarker {},
-                DoubleTransform {
-                    translation: octree_transform_query.single().translation,
-                    rotation: DQuat::IDENTITY,
-                    scale: DVec3::ONE,
-                },
             ));
 
             // Reset the dirty flag once the update is complete
-            octree.dirty_chunks.clear()
+            octree.dirty = false;
         }
     }
 }
-*/
+
 
 
 #[derive(Component)]
 pub struct VoxelTerrainMarker;
-
-
-pub fn render(
-    mut commands: Commands,
-    mut octree_query: Query<&mut SparseVoxelOctree>,
-    octree_transform_query: Query<&DoubleTransform, With<SparseVoxelOctree>>,
-    mut chunk_entities: ResMut<ChunkEntities>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    // Use DoubleTransform for the camera
-    camera_query: Query<&DoubleTransform, With<Camera>>,
-) {
-    let mut octree = match octree_query.get_single_mut() {
-        Ok(o) => o,
-        Err(_) => return,
-    };
-
-    let camera_dt = match camera_query.get_single() {
-        Ok(dt) => dt,
-        Err(_) => return,
-    };
-    // Convert camera's double position to f32 for distance calculations.
-    let camera_pos = camera_dt.translation.as_vec3();
-
-    let octree_dt = octree_transform_query.single();
-    let octree_offset = octree_dt.translation.as_vec3();
-
-    // Define chunk sizing.
-    let step = octree.get_spacing_at_depth(octree.max_depth);
-    let chunk_world_size = octree.get_chunk_size() as f32 * step as f32;
-
-    // 1) DESPAWN out-of-range chunks.
-    let mut chunks_to_remove = Vec::new();
-    for (&(cx, cy, cz), &entity) in chunk_entities.map.iter() {
-        let chunk_min = Vec3::new(
-            cx as f32 * chunk_world_size,
-            cy as f32 * chunk_world_size,
-            cz as f32 * chunk_world_size,
-        );
-        let chunk_center = chunk_min + Vec3::splat(chunk_world_size * 0.5);
-        let final_center = octree_offset + chunk_center;
-        let dist = camera_pos.distance(final_center);
-        if dist > CHUNK_RENDER_DISTANCE as f32 {
-            chunks_to_remove.push((cx, cy, cz, entity));
-        }
-    }
-    for (cx, cy, cz, e) in chunks_to_remove {
-        commands.entity(e).despawn();
-        chunk_entities.map.remove(&(cx, cy, cz));
-    }
-
-    // 2) LOAD new in-range chunks with nearest-first ordering.
-    let camera_cx = ((camera_pos.x - octree_offset.x) / chunk_world_size).floor() as i32;
-    let camera_cy = ((camera_pos.y - octree_offset.y) / chunk_world_size).floor() as i32;
-    let camera_cz = ((camera_pos.z - octree_offset.z) / chunk_world_size).floor() as i32;
-
-    let half_chunks = (CHUNK_RENDER_DISTANCE / chunk_world_size as f64).ceil() as i32;
-    let mut new_chunks_to_spawn = Vec::new();
-    for dx in -half_chunks..=half_chunks {
-        for dy in -half_chunks..=half_chunks {
-            for dz in -half_chunks..=half_chunks {
-                let cc = (camera_cx + dx, camera_cy + dy, camera_cz + dz);
-                if !chunk_entities.map.contains_key(&cc) {
-                    let chunk_min = Vec3::new(
-                        cc.0 as f32 * chunk_world_size,
-                        cc.1 as f32 * chunk_world_size,
-                        cc.2 as f32 * chunk_world_size,
-                    );
-                    let chunk_center = chunk_min + Vec3::splat(chunk_world_size * 0.5);
-                    let final_center = octree_offset + chunk_center;
-                    let dist = camera_pos.distance(final_center);
-                    if dist <= CHUNK_RENDER_DISTANCE as f32 {
-                        new_chunks_to_spawn.push(cc);
-                    }
-                }
-            }
-        }
-    }
-    // Sort candidate chunks by distance (nearest first).
-    new_chunks_to_spawn.sort_by(|a, b| {
-        let pos_a = octree_offset
-            + Vec3::new(
-            a.0 as f32 * chunk_world_size,
-            a.1 as f32 * chunk_world_size,
-            a.2 as f32 * chunk_world_size,
-        )
-            + Vec3::splat(chunk_world_size * 0.5);
-        let pos_b = octree_offset
-            + Vec3::new(
-            b.0 as f32 * chunk_world_size,
-            b.1 as f32 * chunk_world_size,
-            b.2 as f32 * chunk_world_size,
-        )
-            + Vec3::splat(chunk_world_size * 0.5);
-        camera_pos
-            .distance(pos_a)
-            .partial_cmp(&camera_pos.distance(pos_b))
-            .unwrap()
-    });
-
-    let build_budget = 5; // Maximum chunks to build per frame.
-    let mut spawn_count = 0;
-    for cc in new_chunks_to_spawn {
-        if spawn_count >= build_budget {
-            break;
-        }
-        // Compute chunk's world position.
-        let chunk_min = Vec3::new(
-            cc.0 as f32 * chunk_world_size,
-            cc.1 as f32 * chunk_world_size,
-            cc.2 as f32 * chunk_world_size,
-        );
-        let chunk_center = chunk_min + Vec3::splat(chunk_world_size * 0.5);
-        // Check if this chunk has any voxels.
-        if let Some(chunk_node) =
-            octree.get_chunk_node(chunk_center.x as f64, chunk_center.y as f64, chunk_center.z as f64)
-        {
-            if octree.has_volume(chunk_node) {
-                info!("Loading chunk at: {},{},{} (has volume)", cc.0, cc.1, cc.2);
-            }
-        }
-        build_and_spawn_chunk(
-            &mut commands,
-            &octree,
-            &mut meshes,
-            &mut materials,
-            &mut chunk_entities,
-            cc,
-            octree_offset,
-        );
-        spawn_count += 1;
-    }
-
-    // 3) Rebuild dirty chunks (if any) with nearest-first ordering and budget.
-    if !octree.dirty_chunks.is_empty() {
-        let mut dirty = octree.dirty_chunks.drain().collect::<Vec<_>>();
-        dirty.sort_by(|a, b| {
-            let pos_a = octree_offset
-                + Vec3::new(
-                a.0 as f32 * chunk_world_size,
-                a.1 as f32 * chunk_world_size,
-                a.2 as f32 * chunk_world_size,
-            )
-                + Vec3::splat(chunk_world_size * 0.5);
-            let pos_b = octree_offset
-                + Vec3::new(
-                b.0 as f32 * chunk_world_size,
-                b.1 as f32 * chunk_world_size,
-                b.2 as f32 * chunk_world_size,
-            )
-                + Vec3::splat(chunk_world_size * 0.5);
-            camera_pos
-                .distance(pos_a)
-                .partial_cmp(&camera_pos.distance(pos_b))
-                .unwrap()
-        });
-
-        let mut rebuild_count = 0;
-        for chunk_coord in dirty {
-            if rebuild_count >= build_budget {
-                octree.dirty_chunks.insert(chunk_coord);
-                continue;
-            }
-            let chunk_min = Vec3::new(
-                chunk_coord.0 as f32 * chunk_world_size,
-                chunk_coord.1 as f32 * chunk_world_size,
-                chunk_coord.2 as f32 * chunk_world_size,
-            );
-            let chunk_center = chunk_min + Vec3::splat(chunk_world_size * 0.5);
-            let final_center = octree_offset + chunk_center;
-            let dist = camera_pos.distance(final_center);
-
-            if dist <= CHUNK_RENDER_DISTANCE as f32 {
-                if let Some(chunk_node) =
-                    octree.get_chunk_node(chunk_center.x as f64, chunk_center.y as f64, chunk_center.z as f64)
-                {
-                    if octree.has_volume(chunk_node) {
-                        info!(
-                            "Rebuilding chunk at: {},{},{} (has volume)",
-                            chunk_coord.0, chunk_coord.1, chunk_coord.2
-                        );
-                    }
-                }
-                if let Some(e) = chunk_entities.map.remove(&chunk_coord) {
-                    commands.entity(e).despawn();
-                }
-                build_and_spawn_chunk(
-                    &mut commands,
-                    &octree,
-                    &mut meshes,
-                    &mut materials,
-                    &mut chunk_entities,
-                    chunk_coord,
-                    octree_offset,
-                );
-                rebuild_count += 1;
-            } else {
-                if let Some(e) = chunk_entities.map.remove(&chunk_coord) {
-                    commands.entity(e).despawn();
-                }
-            }
-        }
-    }
-}
-
-
-
-fn build_and_spawn_chunk(
-    commands: &mut Commands,
-    octree: &SparseVoxelOctree,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<StandardMaterial>>,
-    chunk_entities: &mut ChunkEntities,
-    chunk_coord: (i32, i32, i32),
-    octree_offset: Vec3,
-) {
-    let face_meshes = build_chunk_geometry(octree, chunk_coord);
-    if face_meshes.is_empty() {
-        return;
-    }
-
-    let merged = merge_meshes(face_meshes);
-    let mesh_handle = meshes.add(merged);
-
-    let step = octree.get_spacing_at_depth(octree.max_depth);
-    let chunk_world_size = octree.get_chunk_size() as f64 * step;
-    let chunk_min = Vec3::new(
-        chunk_coord.0 as f32 * chunk_world_size as f32,
-        chunk_coord.1 as f32 * chunk_world_size as f32,
-        chunk_coord.2 as f32 * chunk_world_size as f32,
-    );
-    let final_pos = octree_offset + chunk_min;
-
-    let e = commands.spawn((
-        PbrBundle {
-            mesh: mesh_handle.into(),
-            material: materials.add(StandardMaterial {
-                base_color: Color::rgb(0.8, 0.7, 0.6),
-                ..default()
-            }).into(),
-            transform: Transform::from_translation(final_pos),
-            ..default()
-        },
-        VoxelTerrainMarker,
-        DoubleTransform {
-            translation: DVec3::from(final_pos),
-            rotation: DQuat::IDENTITY,
-            scale: DVec3::ONE,
-        },
-    ))
-        .id();
-
-    chunk_entities.map.insert(chunk_coord, e);
-}
-
-fn build_chunk_geometry(
-    octree: &SparseVoxelOctree,
-    (cx, cy, cz): (i32, i32, i32),
-) -> Vec<Mesh> {
-    let mut face_meshes = Vec::new();
-
-    // step in world units for one voxel at max_depth
-    let step = octree.get_spacing_at_depth(octree.max_depth);
-    let chunk_size = octree.get_chunk_size();
-
-    // chunk is 16 voxels => chunk_min in world space:
-    let chunk_min_x = cx as f64 * (chunk_size as f64 * step);
-    let chunk_min_y = cy as f64 * (chunk_size as f64 * step);
-    let chunk_min_z = cz as f64 * (chunk_size as f64 * step);
-
-    // for local offset
-    let chunk_min_f32 = Vec3::new(
-        chunk_min_x as f32,
-        chunk_min_y as f32,
-        chunk_min_z as f32,
-    );
-    let voxel_size_f = step as f32;
-
-    // i in [0..16] => corner is chunk_min_x + i*step
-    // no +0.5 => corners approach
-    for i in 0..chunk_size {
-        let vx = chunk_min_x + i as f64 * step;
-        for j in 0..chunk_size {
-            let vy = chunk_min_y + j as f64 * step;
-            for k in 0..chunk_size {
-                let vz = chunk_min_z + k as f64 * step;
-
-                // check if we have a voxel at that corner
-                if let Some(_) = octree.get_voxel_at_world_coords(vx, vy, vz) {
-                    // check neighbors
-                    for &(dx, dy, dz) in NEIGHBOR_OFFSETS.iter() {
-                        let nx = vx + dx as f64 * step;
-                        let ny = vy + dy as f64 * step;
-                        let nz = vz + dz as f64 * step;
-
-                        if octree.get_voxel_at_world_coords(nx, ny, nz).is_none() {
-                            let (normal, local_offset) = crate::systems::voxels::helper::face_orientation(dx, dy, dz, voxel_size_f);
-
-                            // The voxel corner in chunk-local coords
-                            let voxel_corner_local = Vec3::new(vx as f32, vy as f32, vz as f32)
-                                - chunk_min_f32;
-
-                            // generate face
-                            // e.g. center might be the corner + 0.5 offset, or
-                            // we can just treat the corner as the "center" in your face calc
-                            // but let's do it carefully:
-                            let face_center_local = voxel_corner_local + Vec3::splat(voxel_size_f*0.5);
-
-                            let face_mesh = generate_face(
-                                normal,
-                                local_offset,
-                                face_center_local,
-                                voxel_size_f / 2.0,
-                            );
-                            face_meshes.push(face_mesh);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    face_meshes
-}
-
 
 
 fn generate_face(orientation: Vec3, local_position: Vec3, position: Vec3, face_size: f32) -> Mesh {

@@ -5,7 +5,6 @@ use bevy::prelude::*;
 use bevy_render::camera::{OrthographicProjection, Projection, ScalingMode};
 use bevy_window::CursorGrabMode;
 use crate::helper::egui_dock::MainCamera;
-use crate::helper::large_transform::{DoubleTransform, WorldOffset};
 use crate::InspectorVisible;
 use crate::systems::voxels::structure::{Ray, SparseVoxelOctree, Voxel};
 
@@ -33,12 +32,7 @@ pub fn setup(mut commands: Commands,){
 
 
     commands.spawn((
-        DoubleTransform {
-            translation: DVec3::new(0.0, 0.0, 10.0),
-            rotation: DQuat::IDENTITY,
-            scale: DVec3::ONE,
-        },
-        Transform::from_xyz(0.0, 5.0, 10.0), // initial f32
+        Transform::from_xyz(0.0, 0.0, 10.0), // initial f32
         GlobalTransform::default(),
         Camera3d::default(),
         Projection::from(PerspectiveProjection{
@@ -64,13 +58,12 @@ pub fn camera_controller_system(
     // Here we query for BOTH DoubleTransform (f64) and Transform (f32).
     // We'll update DoubleTransform for the "true" position
     // and keep Transform in sync for rendering.a
-    mut query: Query<(&mut DoubleTransform, &mut Transform, &mut CameraController)>,
+    mut query: Query<(&mut Transform, &mut CameraController)>,
     mut octree_query: Query<&mut SparseVoxelOctree>,
     mut app_exit_events: EventWriter<AppExit>,
-    world_offset: Res<WorldOffset>,
 ) {
     let mut window = windows.single_mut();
-    let (mut double_tf, mut render_tf, mut controller) = query.single_mut();
+    let (mut transform, mut controller) = query.single_mut();
 
     // ====================
     // 1) Handle Mouse Look
@@ -87,10 +80,10 @@ pub fn camera_controller_system(
             let pitch_radians = controller.pitch.to_radians();
 
             // Build a double-precision quaternion from those angles
-            let rot_yaw = DQuat::from_axis_angle(DVec3::Y, yaw_radians as f64);
-            let rot_pitch = DQuat::from_axis_angle(DVec3::X, -pitch_radians as f64);
+            let rot_yaw = Quat::from_axis_angle(Vec3::Y, yaw_radians);
+            let rot_pitch = Quat::from_axis_angle(Vec3::X, -pitch_radians);
 
-            double_tf.rotation = rot_yaw * rot_pitch;
+            transform.rotation = rot_yaw * rot_pitch;
         }
     }
 
@@ -109,30 +102,30 @@ pub fn camera_controller_system(
     // ====================
     // 3) Handle Keyboard Movement (WASD, Space, Shift)
     // ====================
-    let mut direction = DVec3::ZERO;
+    let mut direction = Vec3::ZERO;
 
     // Forward/Back
     if keyboard_input.pressed(KeyCode::KeyW) {
-        direction += double_tf.forward();
+        direction += transform.forward().as_vec3();
     }
     if keyboard_input.pressed(KeyCode::KeyS) {
-        direction -= double_tf.forward();
+        direction -= transform.forward().as_vec3();
     }
 
     // Left/Right
     if keyboard_input.pressed(KeyCode::KeyA) {
-        direction -= double_tf.right();
+        direction -= transform.right().as_vec3();
     }
     if keyboard_input.pressed(KeyCode::KeyD) {
-        direction += double_tf.right();
+        direction += transform.right().as_vec3();
     }
 
     // Up/Down
     if keyboard_input.pressed(KeyCode::Space) {
-        direction += double_tf.up();
+        direction += transform.up().as_vec3();
     }
     if keyboard_input.pressed(KeyCode::ShiftLeft) || keyboard_input.pressed(KeyCode::ShiftRight) {
-        direction -= double_tf.up();
+        direction -= transform.up().as_vec3();
     }
 
     // Normalize direction if needed
@@ -143,7 +136,7 @@ pub fn camera_controller_system(
     // Apply movement in double-precision
     let delta_seconds = time.delta_secs_f64();
     let distance = controller.speed as f64 * delta_seconds;
-    double_tf.translation += direction * distance;
+    transform.translation += direction * distance as f32;
 
     
     
@@ -185,7 +178,7 @@ pub fn camera_controller_system(
     }
     if keyboard_input.just_pressed(KeyCode::KeyQ) && window.cursor_options.visible == false{
         for mut octree in octree_query.iter_mut() {
-            octree.insert(double_tf.translation.x as f64, double_tf.translation.y as f64, double_tf.translation.z as f64, Voxel::new(Color::srgb(1.0, 0.0, 0.0)));
+            octree.insert(transform.translation.x, transform.translation.y, transform.translation.z, Voxel::new(Color::srgb(1.0, 0.0, 0.0)));
         }
     }
 
@@ -198,12 +191,12 @@ pub fn camera_controller_system(
         // Get the mouse position in normalized device coordinates (-1 to 1)
         if let Some(_) = window.cursor_position() {
             // Set the ray direction to the camera's forward vector
-            let ray_origin = world_offset.0 + double_tf.translation;
-            let ray_direction = double_tf.forward().normalize();
+            let ray_origin = transform.translation;
+            let ray_direction = transform.forward().normalize();
 
             let ray = Ray {
-                origin: ray_origin.as_vec3(),
-                direction: ray_direction.as_vec3(),
+                origin: ray_origin,
+                direction: ray_direction,
             };
 
 
@@ -229,17 +222,6 @@ pub fn camera_controller_system(
                         BLUE,
                     );*/
                     
-                    let chunk = octree.compute_chunk_coords(hit_x, hit_y, hit_z);
-
-                    info!("Chunk Hit: {},{},{}", chunk.0, chunk.1, chunk.2);
-
-                    if let Some(chunk_node) = octree.get_chunk_node(hit_x,hit_y,hit_z) {
-                        let has_volume = octree.has_volume(chunk_node);
-
-                        info!("Chunk Has Volume: {}", has_volume);
-                    }
-                    
-                    
 
 
 
@@ -258,9 +240,9 @@ pub fn camera_controller_system(
 
                         // Align the offset position to the center of the nearest voxel
                         let (new_voxel_x, new_voxel_y, new_voxel_z) = octree.normalize_to_voxel_at_depth(
-                            offset_position.x as f64,
-                            offset_position.y as f64,
-                            offset_position.z as f64,
+                            offset_position.x,
+                            offset_position.y,
+                            offset_position.z,
                             depth,
                         );
 
@@ -278,9 +260,9 @@ pub fn camera_controller_system(
 
                         // Align the offset position to the center of the nearest voxel
                         let (new_voxel_x, new_voxel_y, new_voxel_z) = octree.normalize_to_voxel_at_depth(
-                            offset_position.x as f64,
-                            offset_position.y as f64,
-                            offset_position.z as f64,
+                            offset_position.x,
+                            offset_position.y,
+                            offset_position.z,
                             depth,
                         );
 
@@ -305,14 +287,6 @@ pub fn camera_controller_system(
         app_exit_events.send(Default::default());
     }
 
-    // =============================================
-    // 8) Convert DoubleTransform -> Bevy Transform
-    // =============================================
-    // The final step is to update the f32 `Transform` that Bevy uses for rendering.
-    // This ensures the camera is visually placed at the correct position.
-    render_tf.translation = double_tf.translation.as_vec3();
-    render_tf.rotation = double_tf.rotation.as_quat();
-    render_tf.scale = double_tf.scale.as_vec3();
         
     
 }

@@ -2,7 +2,6 @@ use bevy::color::palettes::basic::*;
 use bevy::color::palettes::css::{BEIGE, MIDNIGHT_BLUE, ORANGE, ORANGE_RED, SEA_GREEN};
 use bevy::math::*;
 use bevy::prelude::*;
-use crate::helper::large_transform::DoubleTransform;
 use crate::systems::voxels::structure::{SparseVoxelOctree, Voxel};
 /*pub fn setup(
     mut commands: Commands,
@@ -15,7 +14,7 @@ use crate::systems::voxels::structure::{SparseVoxelOctree, Voxel};
         DoubleTransform {
             translation: DVec3::new(0.0, 0.0, 10.0),
             // rotate -90 degrees around X so the circle is on the XY plane
-            rotation: DQuat::from_euler(EulerRot::XYZ, -std::f64::consts::FRAC_PI_2, 0.0, 0.0),
+            rotation: DQuat::from_euler(EulerRot::XYZ, -std::f32::consts::FRAC_PI_2, 0.0, 0.0),
             scale: DVec3::ONE,
         },
         // Bevy's transform components
@@ -65,7 +64,7 @@ pub fn setup(mut commands: Commands,) {
 
     let voxels_per_unit = 16;
     let unit_size = 1.0; // 1 unit in your coordinate space
-    let voxel_size = unit_size / voxels_per_unit as f64;
+    let voxel_size = unit_size / voxels_per_unit as f32;
     
     /*//Octree
     let octree_base_size = 64.0;
@@ -76,7 +75,7 @@ pub fn setup(mut commands: Commands,) {
     let octree_depth = 10;
 
 
-    let mut octree = SparseVoxelOctree::new(octree_depth, octree_base_size, false, false, false);
+    let mut octree = SparseVoxelOctree::new(octree_depth, octree_base_size as f32, false, false, false);
 
     
     let color = Color::rgb(0.2, 0.8, 0.2);
@@ -90,11 +89,6 @@ pub fn setup(mut commands: Commands,) {
     
     commands.spawn(
         (
-            DoubleTransform {
-                translation: DVec3::new(0.0, 0.0, 0.0),
-                rotation: DQuat::IDENTITY,
-                scale: DVec3::ONE,
-            },
             Transform::default(),
             octree
         )
@@ -104,11 +98,6 @@ pub fn setup(mut commands: Commands,) {
     commands.spawn((
         Transform::default(),
         GlobalTransform::default(),
-        DoubleTransform {
-            translation: DVec3::new(0.0, 0.0, 0.0),
-            rotation: DQuat::IDENTITY,
-            scale: DVec3::ONE,
-        },
         PointLight {
             shadows_enabled: true,
             ..default()
@@ -125,30 +114,30 @@ pub fn setup(mut commands: Commands,) {
 /// - `voxel_step`: how finely to sample the sphere in the x/y/z loops
 fn generate_voxel_sphere(
     octree: &mut SparseVoxelOctree,
-    planet_radius: f64,
+    planet_radius: i32,
     voxel_color: Color,
 ) {
     // For simplicity, we center the sphere around (0,0,0).
     // We'll loop over a cubic region [-planet_radius, +planet_radius] in x, y, z
-    let min = -(planet_radius as i64);
-    let max = planet_radius as i64;
+    let min = -planet_radius;
+    let max = planet_radius;
 
     let step = octree.get_spacing_at_depth(octree.max_depth);
 
     for ix in min..=max {
-        let x = ix as f64;
+        let x = ix;
         for iy in min..=max {
-            let y = iy as f64;
+            let y = iy;
             for iz in min..=max {
-                let z = iz as f64;
+                let z = iz;
 
                 // Check if within sphere of radius `planet_radius`
                 let dist2 = x * x + y * y + z * z;
                 if dist2 <= planet_radius * planet_radius {
                     // Convert (x,y,z) to world space, stepping by `voxel_step`.
-                    let wx = x * step;
-                    let wy = y * step;
-                    let wz = z * step;
+                    let wx = x as f32 * step;
+                    let wy = y as f32 * step;
+                    let wz = z as f32 * step;
 
                     // Insert the voxel
                     let voxel = Voxel {
@@ -180,11 +169,11 @@ fn generate_voxel_rect(
 
     // Triple-nested loop for each voxel in [0..16, 0..256, 0..16]
     for ix in 0..size_x {
-        let x = ix as f64;
+        let x = ix as f32;
         for iy in 0..size_y {
-            let y = iy as f64;
+            let y = iy as f32;
             for iz in 0..size_z {
-                let z = iz as f64;
+                let z = iz as f32;
 
                 // Convert (x,y,z) to world coordinates
                 let wx = x * step;
@@ -216,9 +205,9 @@ fn generate_large_plane(
     // Double-nested loop for each voxel in [0..width, 0..depth],
     // with y=0. 
     for ix in 0..width {
-        let x = ix as f64;
+        let x = ix as f32;
         for iz in 0..depth {
-            let z = iz as f64;
+            let z = iz as f32;
             // y is always 0. 
             let y = 0.0;
 

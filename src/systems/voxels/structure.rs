@@ -28,27 +28,12 @@ pub struct SparseVoxelOctree {
     #[reflect(ignore)]
     pub root: OctreeNode,
     pub max_depth: u32,
-    pub size: f64,
+    pub size: f32,
     pub show_wireframe: bool,
     pub show_world_grid: bool,
     pub show_chunks: bool,
-    pub dirty_chunks: HashSet<(i32, i32, i32)>,
+    pub dirty: bool,
 }
-
-#[derive(Default, Resource, Reflect)]
-pub struct ChunkEntities {
-    pub map: HashMap<(i32, i32, i32), Entity>,
-}
-
-#[derive(Component)]
-pub struct ChunkMarker {
-    pub(crate) chunk_coords: (i64, i64, i64),
-}
-
-
-pub const CHUNK_RENDER_DISTANCE: f64 = 12.0;
-pub const CHUNK_BUILD_BUDGET: usize = 10;
-
 
 impl OctreeNode {
     /// Creates a new empty octree node.
@@ -76,7 +61,7 @@ impl Voxel {
 }
 
 
-pub const NEIGHBOR_OFFSETS: [(f64, f64, f64); 6] = [
+pub const NEIGHBOR_OFFSETS: [(f32, f32, f32); 6] = [
     (-1.0, 0.0, 0.0), // Left
     (1.0, 0.0, 0.0),  // Right
     (0.0, -1.0, 0.0), // Down
@@ -85,14 +70,6 @@ pub const NEIGHBOR_OFFSETS: [(f64, f64, f64); 6] = [
     (0.0, 0.0, 1.0),  // Front
 ];
 
-pub const CHUNK_NEIGHBOR_OFFSETS: [(i32, i32, i32); 6] = [
-    (-1, 0, 0),
-    (1, 0, 0),
-    (0, -1, 0),
-    (0, 1, 0),
-    (0, 0, -1),
-    (0, 0, 1),
-];
 
 #[derive(Debug)]
 pub struct Ray {
