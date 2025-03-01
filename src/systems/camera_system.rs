@@ -16,6 +16,14 @@ pub struct CameraController {
     pub sensitivity: f32,
 }
 
+
+#[derive(Component, Default)]
+pub struct Selector {
+    pub selected_voxel: Vec3,
+}
+
+
+
 impl Default for CameraController {
     fn default() -> Self {
         Self {
@@ -40,8 +48,8 @@ pub fn setup(mut commands: Commands,){
           ..default()  
         }),
         MainCamera,
-        CameraController::default()
-
+        CameraController::default(),
+        Selector::default(),
         ));
 
 
@@ -59,6 +67,7 @@ pub fn camera_controller_system(
     // We'll update DoubleTransform for the "true" position
     // and keep Transform in sync for rendering.a
     mut query: Query<(&mut Transform, &mut CameraController)>,
+    mut selector: Query<(&mut Selector), With<CameraController>>,
     mut octree_query: Query<&mut SparseVoxelOctree>,
     mut app_exit_events: EventWriter<AppExit>,
 ) {
@@ -178,7 +187,7 @@ pub fn camera_controller_system(
     }
     if keyboard_input.just_pressed(KeyCode::KeyQ) && window.cursor_options.visible == false{
         for mut octree in octree_query.iter_mut() {
-            octree.insert(transform.translation.x, transform.translation.y, transform.translation.z, Voxel::new(Color::srgb(1.0, 0.0, 0.0)));
+            octree.insert(transform.translation, Voxel::new(Color::srgb(1.0, 0.0, 0.0)));
         }
     }
 
@@ -205,49 +214,40 @@ pub fn camera_controller_system(
                 if let Some((hit_x, hit_y, hit_z, depth,normal)) = octree.raycast(&ray) {
                     
 
-                    
-                    /*//TODO: Currently broken needs fixing to work with double precision 
-                    println!("raycast: {:?}", ray);
-                    // Visualize the ray
-                    lines.lines.push(EphemeralLine {
-                        start: ray_origin.as_vec3(),
-                        end: DVec3::new(hit_x, hit_y, hit_z).as_vec3(),
-                        color: Color::from(GREEN),
-                        time_left: 5.0, // draw for 2 seconds
-                    });*/
-
-                    /*gizmos.ray(
-                        ray.origin,
-                        ray.direction,
-                        BLUE,
-                    );*/
-                    
-
-
-
-
-                    
-
-
                     if mouse_button_input.just_pressed(MouseButton::Right) {
 
-                        let voxel_size = octree.get_spacing_at_depth(depth);
-                        let hit_position = Vec3::new(hit_x as f32, hit_y as f32, hit_z as f32);
-                        let epsilon = voxel_size * 0.1; // Adjust this value as needed (e.g., 0.1 times the voxel size)
+                        if keyboard_input.pressed(KeyCode::ControlLeft) {
+                            let voxel_size = octree.get_spacing_at_depth(depth);
+                            let hit_position = Vec3::new(hit_x as f32, hit_y as f32, hit_z as f32);
+                            let epsilon = voxel_size * 0.1; // Adjust this value as needed (e.g., 0.1 times the voxel size)
 
-                        // Offset position by epsilon in the direction of the normal
-                        let offset_position = hit_position - (normal * Vec3::new(epsilon as f32, epsilon as f32, epsilon as f32));
+                            // Offset position by epsilon in the direction of the normal
+                            let offset_position = hit_position - (normal * Vec3::new(epsilon as f32, epsilon as f32, epsilon as f32));
 
-                        // Align the offset position to the center of the nearest voxel
-                        let (new_voxel_x, new_voxel_y, new_voxel_z) = octree.normalize_to_voxel_at_depth(
-                            offset_position.x,
-                            offset_position.y,
-                            offset_position.z,
-                            depth,
-                        );
+                            // Align the offset position to the center of the nearest voxel
+                            let new_voxel = octree.normalize_to_voxel_at_depth(
+                                offset_position,
+                                depth,
+                            );
 
-                        // Remove the voxel
-                        octree.remove(new_voxel_x, new_voxel_y, new_voxel_z);
+                            selector.single_mut().selected_voxel = new_voxel;
+                            info!("Selected Voxel: {:?}", selector.single().selected_voxel);
+
+
+                        }
+                        else{
+                            let voxel_size = octree.get_spacing_at_depth(depth);
+                            let hit_position = Vec3::new(hit_x as f32, hit_y as f32, hit_z as f32);
+                            let epsilon = voxel_size * 0.1; // Adjust this value as needed (e.g., 0.1 times the voxel size)
+
+                            // Offset position by epsilon in the direction of the normal
+                            let offset_position = hit_position - (normal * Vec3::new(epsilon as f32, epsilon as f32, epsilon as f32));
+
+                            // Remove the voxel
+                            octree.remove(offset_position);
+                        }
+
+
                     }
                     else if mouse_button_input.just_pressed(MouseButton::Left) {
 
@@ -258,19 +258,9 @@ pub fn camera_controller_system(
                         // Offset position by epsilon in the direction of the normal
                         let offset_position = hit_position + (normal * Vec3::new(epsilon as f32, epsilon as f32, epsilon as f32));
 
-                        // Align the offset position to the center of the nearest voxel
-                        let (new_voxel_x, new_voxel_y, new_voxel_z) = octree.normalize_to_voxel_at_depth(
-                            offset_position.x,
-                            offset_position.y,
-                            offset_position.z,
-                            depth,
-                        );
-
                         // Insert the new voxel
                         octree.insert(
-                            new_voxel_x,
-                            new_voxel_y,
-                            new_voxel_z,
+                            offset_position,
                             Voxel::new(Color::srgb(1.0, 0.0, 0.0)),
                         );
                     }

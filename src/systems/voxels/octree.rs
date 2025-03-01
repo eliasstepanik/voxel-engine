@@ -5,7 +5,7 @@ use bevy::math::{DQuat, DVec3};
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::render::render_asset::RenderAssetUsages;
-use crate::systems::voxels::structure::{OctreeNode, Ray, SparseVoxelOctree, Voxel, AABB, NEIGHBOR_OFFSETS};
+use crate::systems::voxels::structure::{DirtyVoxel, OctreeNode, Ray, SparseVoxelOctree, Voxel, AABB, NEIGHBOR_OFFSETS};
 
 impl SparseVoxelOctree {
     /// Creates a new octree with the specified max depth, size, and wireframe visibility.
@@ -17,52 +17,50 @@ impl SparseVoxelOctree {
             show_wireframe,
             show_world_grid,
             show_chunks,
-            dirty: true,
+            dirty: Vec::new(),
         }
     }
+    pub fn insert(&mut self, position: Vec3, voxel: Voxel) {
+        // Align to the center of the voxel at max_depth
+        let mut aligned = self.normalize_to_voxel_at_depth(position, self.max_depth);
+        let mut world_center = self.denormalize_voxel_center(aligned);
 
-    pub fn insert(&mut self, world_x: f32, world_y: f32, world_z: f32, voxel: Voxel) {
-        // Normalize the world coordinates to the nearest voxel grid position
-        let (aligned_x, aligned_y, aligned_z) = self.normalize_to_voxel_at_depth(world_x, world_y, world_z, self.max_depth);
-
-        // Iteratively expand the root to include the voxel position
-        while !self.contains(aligned_x, aligned_y, aligned_z) {
-            self.expand_root(aligned_x, aligned_y, aligned_z);
+        // Expand as needed using the denormalized position.
+        while !self.contains(world_center.x, world_center.y, world_center.z) {
+            self.expand_root(world_center.x, world_center.y, world_center.z);
+            // Recompute aligned and world_center after expansion.
+            aligned = self.normalize_to_voxel_at_depth(position, self.max_depth);
+            world_center = self.denormalize_voxel_center(aligned);
         }
 
-        // Correct normalization: calculate the position relative to the octree's center
-        let normalized_x = (aligned_x + (self.size / 2.0)) / self.size;
-        let normalized_y = (aligned_y + (self.size / 2.0)) / self.size;
-        let normalized_z = (aligned_z + (self.size / 2.0)) / self.size;
-
-        // Insert the voxel with its world position
-        let mut voxel_with_position = voxel;
-        voxel_with_position.position = Vec3::new(world_x as f32, world_y as f32, world_z as f32);
-        
-
-        self.dirty = true;
+        let dirty_voxel = DirtyVoxel{
+            position: aligned,
+        };
+        self.dirty.push(dirty_voxel);
 
 
-        SparseVoxelOctree::insert_recursive(&mut self.root, normalized_x, normalized_y, normalized_z, voxel_with_position, self.max_depth);
+        Self::insert_recursive(&mut self.root, aligned, voxel, self.max_depth);
     }
 
-    fn insert_recursive(node: &mut OctreeNode, x: f32, y: f32, z: f32, voxel: Voxel, depth: u32) {
+    fn insert_recursive(node: &mut OctreeNode, position: Vec3, voxel: Voxel, depth: u32) {
         if depth == 0 {
             node.voxel = Some(voxel);
             node.is_leaf = true;
             return;
         }
+        let epsilon = 1e-6;
+        // Determine octant index by comparing with 0.5
+        let index = ((position.x >= 0.5 - epsilon) as usize)
+            + ((position.y >= 0.5 - epsilon) as usize * 2)
+            + ((position.z >= 0.5 - epsilon) as usize * 4);
 
-        let epsilon = 1e-6; // Epsilon for floating-point precision
-
-        let index = ((x >= 0.5 - epsilon) as usize) + ((y >= 0.5 - epsilon) as usize * 2) + ((z >= 0.5 - epsilon) as usize * 4);
-
+        // If there are no children, create them.
         if node.children.is_none() {
             node.children = Some(Box::new(core::array::from_fn(|_| OctreeNode::new())));
             node.is_leaf = false;
         }
-
         if let Some(ref mut children) = node.children {
+            // Adjust coordinate into the child’s [0, 1] range.
             let adjust_coord = |coord: f32| {
                 if coord >= 0.5 - epsilon {
                     (coord - 0.5) * 2.0
@@ -70,47 +68,47 @@ impl SparseVoxelOctree {
                     coord * 2.0
                 }
             };
-            SparseVoxelOctree::insert_recursive(&mut children[index], adjust_coord(x), adjust_coord(y), adjust_coord(z), voxel, depth - 1);
+            let child_pos = Vec3::new(
+                adjust_coord(position.x),
+                adjust_coord(position.y),
+                adjust_coord(position.z),
+            );
+            Self::insert_recursive(&mut children[index], child_pos, voxel, depth - 1);
         }
     }
 
-    pub fn remove(&mut self, world_x: f32, world_y: f32, world_z: f32) {
-        // Normalize the world coordinates to the nearest voxel grid position
-        let (aligned_x, aligned_y, aligned_z) =
-            self.normalize_to_voxel_at_depth(world_x, world_y, world_z, self.max_depth);
+    pub fn remove(&mut self, position: Vec3) {
+        let aligned = self.normalize_to_voxel_at_depth(position, self.max_depth);
 
-        // Correct normalization: calculate the position relative to the octree's center
-        let normalized_x = (aligned_x + (self.size / 2.0)) / self.size;
-        let normalized_y = (aligned_y + (self.size / 2.0)) / self.size;
-        let normalized_z = (aligned_z + (self.size / 2.0)) / self.size;
+        let dirty_voxel = DirtyVoxel{
+            position: aligned,
+        };
+        self.dirty.push(dirty_voxel);
 
-        self.dirty = true;
-
-
-        // Call the recursive remove function
-        Self::remove_recursive(&mut self.root, normalized_x, normalized_y, normalized_z, self.max_depth);
+        Self::remove_recursive(&mut self.root, aligned.x, aligned.y, aligned.z, self.max_depth);
     }
 
-    fn remove_recursive(node: &mut OctreeNode, x: f32, y: f32, z: f32, depth: u32) -> bool {
+    fn remove_recursive(
+        node: &mut OctreeNode,
+        x: f32,
+        y: f32,
+        z: f32,
+        depth: u32,
+    ) -> bool {
         if depth == 0 {
-            // This is the leaf node where the voxel should be
             if node.voxel.is_some() {
                 node.voxel = None;
                 node.is_leaf = false;
-                // Since we've removed the voxel and there are no children, this node can be pruned
                 return true;
             } else {
-                // There was no voxel here
                 return false;
             }
         }
 
         if node.children.is_none() {
-            // No children to traverse, voxel not found
             return false;
         }
-
-        let epsilon = 1e-6; // Epsilon for floating-point precision
+        let epsilon = 1e-6;
         let index = ((x >= 0.5 - epsilon) as usize)
             + ((y >= 0.5 - epsilon) as usize * 2)
             + ((z >= 0.5 - epsilon) as usize * 4);
@@ -124,7 +122,6 @@ impl SparseVoxelOctree {
         };
 
         let child = &mut node.children.as_mut().unwrap()[index];
-
         let should_prune_child = Self::remove_recursive(
             child,
             adjust_coord(x),
@@ -134,128 +131,142 @@ impl SparseVoxelOctree {
         );
 
         if should_prune_child {
-            // Remove the child node
+            // remove the child node
             node.children.as_mut().unwrap()[index] = OctreeNode::new();
         }
 
-        // After removing the child, check if all children are empty
-        let all_children_empty = node.children.as_ref().unwrap().iter().all(|child| child.is_empty());
+        // Check if all children are empty
+        let all_children_empty = node
+            .children
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|child| child.is_empty());
 
         if all_children_empty {
-            // Remove the children array
             node.children = None;
-            node.is_leaf = true; // Now this node becomes a leaf
-            // If this node has no voxel and no children, it can be pruned
+            node.is_leaf = true;
             return node.voxel.is_none();
-        } else {
-            return false;
         }
+        false
     }
 
 
-    fn expand_root(&mut self, x: f32, y: f32, z: f32) {
-        let new_size = self.size * 2.0;
-        let new_depth = self.max_depth + 1;
+    fn expand_root(&mut self, _x: f32, _y: f32, _z: f32) {
+        info!("Root expanding ...");
+        // Save the old root and its size.
+        let old_root = std::mem::replace(&mut self.root, OctreeNode::new());
+        let old_size = self.size;
 
-        // Create a new root node with 8 children
-        let mut new_root = OctreeNode::new();
-        new_root.children = Some(Box::new(core::array::from_fn(|_| OctreeNode::new())));
+        // Update the octree's size and depth.
+        self.size *= 2.0;
+        self.max_depth += 1;
 
-        // The old root had 8 children; move each child to the correct new position
-        if let Some(old_children) = self.root.children.take() {
-            for (i, old_child) in old_children.iter().enumerate() {
-                // Determine which child of the new root the old child belongs in
-                let offset_x = if (i & 1) == 1 { 1 } else { 0 };
-                let offset_y = if (i & 2) == 2 { 1 } else { 0 };
-                let offset_z = if (i & 4) == 4 { 1 } else { 0 };
-
-                let new_index = offset_x + (offset_y * 2) + (offset_z * 4);
-
-                // Now, move the old child into the correct new child of the new root
-                let new_child = &mut new_root.children.as_mut().unwrap()[new_index];
-
-                // Create new children for the new child if necessary
-                if new_child.children.is_none() {
-                    new_child.children = Some(Box::new(core::array::from_fn(|_| OctreeNode::new())));
-                }
-
-                // Place the old child in the correct "facing" position in the new child
-                let facing_x = if offset_x == 1 { 0 } else { 1 };
-                let facing_y = if offset_y == 1 { 0 } else { 1 };
-                let facing_z = if offset_z == 1 { 0 } else { 1 };
-
-                let facing_index = facing_x + (facing_y * 2) + (facing_z * 4);
-                new_child.children.as_mut().unwrap()[facing_index] = old_child.clone();
-            }
+        // Reinsert each voxel from the old tree.
+        let voxels = Self::collect_voxels_from_node(&old_root, old_size);
+        for (world_pos, voxel, _depth) in voxels {
+            self.insert(world_pos, voxel);
         }
-
-        self.root = new_root;
-        self.size = new_size;
-        self.max_depth = new_depth;
     }
 
-
-    /// Traverse the octree and collect voxel data.
-    pub fn traverse(&self) -> Vec<(f32, f32, f32, Color, u32)> {
+    /// Helper: Collect all voxels from a given octree node recursively.
+    /// The coordinate system here assumes the node covers [–old_size/2, +old_size/2] in each axis.
+    fn collect_voxels_from_node(node: &OctreeNode, old_size: f32) -> Vec<(Vec3, Voxel, u32)> {
         let mut voxels = Vec::new();
-        Self::traverse_recursive(&self.root, 0.0, 0.0, 0.0, 1.0, 0, &mut voxels);
+        Self::collect_voxels_recursive(node, -old_size / 2.0, -old_size / 2.0, -old_size / 2.0, old_size, 0, &mut voxels);
         voxels
     }
 
-    fn traverse_recursive(
+    fn collect_voxels_recursive(
         node: &OctreeNode,
         x: f32,
         y: f32,
         z: f32,
         size: f32,
         depth: u32,
-        voxels: &mut Vec<(f32, f32, f32, Color, u32)>,
+        out: &mut Vec<(Vec3, Voxel, u32)>,
     ) {
-        if node.is_leaf/* && !node.is_constant*/ {
+        if node.is_leaf {
             if let Some(voxel) = node.voxel {
-                voxels.push((x, y, z, voxel.color, depth));
+                // Compute the center of this node's region.
+                let center = Vec3::new(x + size / 2.0, y + size / 2.0, z + size / 2.0);
+                out.push((center, voxel, depth));
             }
         }
-
-        if let Some(ref children) = node.children {
-            let half_size = size / 2.0;
+        if let Some(children) = &node.children {
+            let half = size / 2.0;
             for (i, child) in children.iter().enumerate() {
-                let offset = |bit: usize| if (i & bit) == bit { half_size } else { 0.0 };
-                Self::traverse_recursive(
-                    child,
-                    x + offset(1),
-                    y + offset(2),
-                    z + offset(4),
-                    half_size,
-                    depth + 1,
-                    voxels,
-                );
+                let offset_x = if (i & 1) != 0 { half } else { 0.0 };
+                let offset_y = if (i & 2) != 0 { half } else { 0.0 };
+                let offset_z = if (i & 4) != 0 { half } else { 0.0 };
+                Self::collect_voxels_recursive(child, x + offset_x, y + offset_y, z + offset_z, half, depth + 1, out);
             }
         }
     }
 
 
-    /// Retrieves a reference to the voxel at the given normalized coordinates and depth, if it exists.
+
+    pub fn traverse(&self) -> Vec<(Vec3, Color, u32)> {
+        let mut voxels = Vec::new();
+        // Start at the normalized center (0.5, 0.5, 0.5) rather than (0,0,0)
+        Self::traverse_recursive(
+            &self.root,
+            Vec3::splat(0.5), // normalized center of the root cell
+            1.0,              // full normalized cell size
+            0,
+            &mut voxels,
+            self,
+        );
+        voxels
+    }
+
+    fn traverse_recursive(
+        node: &OctreeNode,
+        local_center: Vec3,
+        size: f32,
+        depth: u32,
+        out: &mut Vec<(Vec3, Color, u32)>,
+        octree: &SparseVoxelOctree,
+    ) {
+        // If a leaf contains a voxel, record its world-space center
+        if node.is_leaf {
+            if let Some(voxel) = node.voxel {
+                out.push((octree.denormalize_voxel_center(local_center), voxel.color, depth));
+            }
+        }
+
+        // If the node has children, subdivide the cell into 8 subcells.
+        if let Some(ref children) = node.children {
+            let offset = size / 4.0;  // child center offset from parent center
+            let new_size = size / 2.0;  // each child cell's size in normalized space
+            for (i, child) in children.iter().enumerate() {
+                // Compute each axis' offset: use +offset if the bit is set, else -offset.
+                let dx = if (i & 1) != 0 { offset } else { -offset };
+                let dy = if (i & 2) != 0 { offset } else { -offset };
+                let dz = if (i & 4) != 0 { offset } else { -offset };
+                let child_center = local_center + Vec3::new(dx, dy, dz);
+
+                Self::traverse_recursive(child, child_center, new_size, depth + 1, out, octree);
+            }
+        }
+    }
+
+
+
+    /// Retrieve a voxel from the octree if it exists (x,y,z in [-0.5..+0.5] range).
     pub fn get_voxel_at(&self, x: f32, y: f32, z: f32) -> Option<&Voxel> {
         Self::get_voxel_recursive(&self.root, x, y, z)
     }
 
-    fn get_voxel_recursive(
-        node: &OctreeNode,
-        x: f32,
-        y: f32,
-        z: f32,
-    ) -> Option<&Voxel> {
+    fn get_voxel_recursive(node: &OctreeNode, x: f32, y: f32, z: f32) -> Option<&Voxel> {
         if node.is_leaf {
             return node.voxel.as_ref();
         }
-
-        if let Some(ref children) = node.children {
-            let epsilon = 1e-6; // Epsilon for floating-point precision
+        if let Some(children) = &node.children {
+            let epsilon = 1e-6;
             let index = ((x >= 0.5 - epsilon) as usize)
                 + ((y >= 0.5 - epsilon) as usize * 2)
                 + ((z >= 0.5 - epsilon) as usize * 4);
-
             let adjust_coord = |coord: f32| {
                 if coord >= 0.5 - epsilon {
                     (coord - 0.5) * 2.0
@@ -263,7 +274,6 @@ impl SparseVoxelOctree {
                     coord * 2.0
                 }
             };
-
             Self::get_voxel_recursive(
                 &children[index],
                 adjust_coord(x),
@@ -279,34 +289,32 @@ impl SparseVoxelOctree {
     /// The offsets are directions (-1, 0, 1) for x, y, z.
     pub fn has_neighbor(
         &self,
-        world_x: f32,
-        world_y: f32,
-        world_z: f32,
+        position: Vec3,
         offset_x: i32,
         offset_y: i32,
         offset_z: i32,
         depth: u32,
     ) -> bool {
-        // Normalize the world coordinates to the nearest voxel grid position at the specified depth
-        let (aligned_x, aligned_y, aligned_z) =
-            self.normalize_to_voxel_at_depth(world_x, world_y, world_z, depth);
+        let aligned = self.normalize_to_voxel_at_depth(position, depth);
+        let voxel_count = 2_u32.pow(depth) as f32;
+        // Normalized voxel size is 1/voxel_count
+        let norm_voxel_size = 1.0 / voxel_count;
 
-        // Calculate the voxel size at the specified depth
-        let voxel_size = self.get_spacing_at_depth(depth);
+        let neighbor = Vec3::new(
+            aligned.x + (offset_x as f32) * norm_voxel_size,
+            aligned.y + (offset_y as f32) * norm_voxel_size,
+            aligned.z + (offset_z as f32) * norm_voxel_size,
+        );
 
-        // Calculate the neighbor's world position
-        let neighbor_x = aligned_x + (offset_x as f32) * voxel_size;
-        let neighbor_y = aligned_y + (offset_y as f32) * voxel_size;
-        let neighbor_z = aligned_z + (offset_z as f32) * voxel_size;
+        // Convert the normalized neighbor coordinate back to world space
+        let half_size = self.size * 0.5;
+        let neighbor_world = neighbor * self.size - Vec3::splat(half_size);
 
-        // Check if the neighbor position is within bounds
-        if !self.contains(neighbor_x, neighbor_y, neighbor_z) {
+        if !self.contains(neighbor_world.x, neighbor_world.y, neighbor_world.z) {
             return false;
         }
 
-        // Get the voxel in the neighboring position
-        self.get_voxel_at_world_coords(neighbor_x, neighbor_y, neighbor_z)
-            .is_some()
+        self.get_voxel_at_world_coords(neighbor_world).is_some()
     }
 
 

@@ -11,7 +11,7 @@ impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
 
         app.add_systems(Startup, (setup).chain());
-        app.add_systems(Update, (crate::systems::voxels::rendering::render,crate::systems::voxels::debug::visualize_octree.run_if(should_visualize_octree), crate::systems::voxels::debug::draw_grid.run_if(should_draw_grid)).chain());
+        app.add_systems(Update, (crate::systems::voxels::rendering::render,crate::systems::voxels::debug::visualize_octree_system.run_if(should_visualize_octree), crate::systems::voxels::debug::draw_grid.run_if(should_draw_grid)).chain());
 
         app.register_type::<SparseVoxelOctree>();
 
