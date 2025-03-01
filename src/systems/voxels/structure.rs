@@ -8,6 +8,10 @@ use bevy_reflect::Reflect;
 #[derive(Debug, Clone, Copy, Component, PartialEq, Default)]
 pub struct Voxel {
     pub color: Color,
+}
+
+#[derive(Debug, Clone, Copy,Reflect)]
+pub struct DirtyVoxel {
     pub position: Vec3,
 }
 
@@ -32,7 +36,8 @@ pub struct SparseVoxelOctree {
     pub show_wireframe: bool,
     pub show_world_grid: bool,
     pub show_chunks: bool,
-    pub dirty: bool,
+
+    pub dirty: Vec<DirtyVoxel>,
 }
 
 impl OctreeNode {
@@ -55,7 +60,6 @@ impl Voxel {
     pub fn new(color: Color) -> Self {
         Self {
             color,
-            position: Vec3::ZERO
         }
     }
 }

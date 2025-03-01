@@ -62,15 +62,8 @@ use crate::systems::voxels::structure::{SparseVoxelOctree, Voxel};
 pub fn setup(mut commands: Commands,) {
 
 
-    let voxels_per_unit = 16;
-    let unit_size = 1.0; // 1 unit in your coordinate space
-    let voxel_size = unit_size / voxels_per_unit as f32;
+    let unit_size = 1.0;
     
-    /*//Octree
-    let octree_base_size = 64.0;
-    let octree_depth = 10;*/
-
-    // Octree parameters
     let octree_base_size = 64.0 * unit_size; // Octree's total size in your world space
     let octree_depth = 10;
 
@@ -80,11 +73,15 @@ pub fn setup(mut commands: Commands,) {
     
     let color = Color::rgb(0.2, 0.8, 0.2);
     /*generate_voxel_rect(&mut octree,color);*/
-    /*generate_voxel_sphere(&mut octree, 10.0, color);*/
+    generate_voxel_sphere(&mut octree, 10, color);
 
-    generate_large_plane(&mut octree, 200, 200,color );
+    /*generate_large_plane(&mut octree, 200, 200,color );*/
     
-    /*octree.insert(0.0,0.0,0.0, Voxel::new(Color::from(RED)));*/
+    
+    /*let postion = octree.normalize_to_voxel_at_depth(Vec3::ZERO, 10);
+    
+    octree.insert(postion, Voxel::new(Color::from(RED)));
+    */
 
     
     commands.spawn(
@@ -138,13 +135,13 @@ fn generate_voxel_sphere(
                     let wx = x as f32 * step;
                     let wy = y as f32 * step;
                     let wz = z as f32 * step;
+                    let position = Vec3::new(wx, wy, wz);
 
                     // Insert the voxel
                     let voxel = Voxel {
                         color: voxel_color,
-                        position: Default::default(), // Will get set internally by `insert()`
                     };
-                    octree.insert(wx, wy, wz, voxel);
+                    octree.insert(position, voxel);
                 }
             }
         }
@@ -180,14 +177,13 @@ fn generate_voxel_rect(
                 let wy = y * step;
                 let wz = z * step;
 
-                // Create the voxel
+                let position = Vec3::new(wx, wy, wz);
+
+                // Insert the voxel
                 let voxel = Voxel {
                     color: voxel_color,
-                    position: Default::default(), // Will be set by octree internally
                 };
-
-                // Insert the voxel into the octree
-                octree.insert(wx, wy, wz, voxel);
+                octree.insert(position, voxel);
             }
         }
     }
@@ -216,14 +212,13 @@ fn generate_large_plane(
             let wy = y * step;
             let wz = z * step;
 
-            // Create the voxel
+            let position = Vec3::new(wx, wy, wz);
+
+            // Insert the voxel
             let voxel = Voxel {
                 color,
-                position: Vec3::ZERO, // Will be set internally by octree.insert()
             };
-
-            // Insert the voxel into the octree
-            octree.insert(wx, wy, wz, voxel);
+            octree.insert(position, voxel);
         }
     }
 }

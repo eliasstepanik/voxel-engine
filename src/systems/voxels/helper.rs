@@ -21,32 +21,32 @@ impl SparseVoxelOctree {
     }
 
 
+    /// Returns the size of one voxel at the given depth.
     pub fn get_spacing_at_depth(&self, depth: u32) -> f32 {
-        // Ensure the depth does not exceed the maximum depth
-        let effective_depth = depth.min(self.max_depth);
-
-        // Calculate the voxel size at the specified depth
-        self.size / (2_u32.pow(effective_depth)) as f32
+        let effective = depth.min(self.max_depth);
+        self.size / (2_u32.pow(effective)) as f32
     }
 
-    /// Normalize the world position to the nearest voxel grid position at the specified depth.
-    pub fn normalize_to_voxel_at_depth(
-        &self,
-        world_x: f32,
-        world_y: f32,
-        world_z: f32,
-        depth: u32,
-    ) -> (f32, f32, f32) {
-        // Calculate the voxel size at the specified depth
-        let voxel_size = self.get_spacing_at_depth(depth) as f32;
 
-        // Align the world position to the center of the voxel
-        let aligned_x = (world_x / voxel_size).floor() * voxel_size + voxel_size / 2.0;
-        let aligned_y = (world_y / voxel_size).floor() * voxel_size + voxel_size / 2.0;
-        let aligned_z = (world_z / voxel_size).floor() * voxel_size + voxel_size / 2.0;
-
-        (aligned_x, aligned_y, aligned_z)
+    /// Center-based: [-size/2..+size/2]. Shift +half_size => [0..size], floor, shift back.
+    pub fn normalize_to_voxel_at_depth(&self, position: Vec3, depth: u32) -> Vec3 {
+        // Convert world coordinate to normalized [0,1] space.
+        let half_size = self.size * 0.5;
+        // Shift to [0, self.size]
+        let shifted = (position + Vec3::splat(half_size)) / self.size;
+        // Determine the number of voxels along an edge at the given depth.
+        let voxel_count = 2_u32.pow(depth) as f32;
+        // Get the voxel index (as a float) and then compute the center in normalized space.
+        let voxel_index = (shifted * voxel_count).floor();
+        let voxel_center = (voxel_index + Vec3::splat(0.5)) / voxel_count;
+        voxel_center
     }
+    pub fn denormalize_voxel_center(&self, voxel_center: Vec3) -> Vec3 {
+        let half_size = self.size * 0.5;
+        // Convert the normalized voxel center back to world space.
+        voxel_center * self.size - Vec3::splat(half_size)
+    }
+    
 
     pub fn compute_child_bounds(&self, bounds: &AABB, index: usize) -> AABB {
         let min = bounds.min;
@@ -75,7 +75,13 @@ impl SparseVoxelOctree {
         ray: &Ray,
         aabb: &AABB,
     ) -> Option<(f32, f32, Vec3)> {
-        let inv_dir = 1.0 / ray.direction;
+        // Define a safe inverse function to avoid division by zero.
+        let safe_inv = |d: f32| if d.abs() < 1e-6 { 1e6 } else { 1.0 / d };
+        let inv_dir = Vec3::new(
+            safe_inv(ray.direction.x),
+            safe_inv(ray.direction.y),
+            safe_inv(ray.direction.z),
+        );
 
         let t1 = (aabb.min - ray.origin) * inv_dir;
         let t2 = (aabb.max - ray.origin) * inv_dir;
@@ -87,10 +93,9 @@ impl SparseVoxelOctree {
         let t_exit = tmax.min_element();
 
         if t_enter <= t_exit && t_exit >= 0.0 {
-            // Calculate normal based on which component contributed to t_enter
             let epsilon = 1e-6;
             let mut normal = Vec3::ZERO;
-
+            // Determine which face was hit by comparing t_enter to the computed values.
             if (t_enter - t1.x).abs() < epsilon || (t_enter - t2.x).abs() < epsilon {
                 normal = Vec3::new(if ray.direction.x < 0.0 { 1.0 } else { -1.0 }, 0.0, 0.0);
             } else if (t_enter - t1.y).abs() < epsilon || (t_enter - t2.y).abs() < epsilon {
@@ -98,52 +103,38 @@ impl SparseVoxelOctree {
             } else if (t_enter - t1.z).abs() < epsilon || (t_enter - t2.z).abs() < epsilon {
                 normal = Vec3::new(0.0, 0.0, if ray.direction.z < 0.0 { 1.0 } else { -1.0 });
             }
-
             Some((t_enter, t_exit, normal))
         } else {
             None
         }
     }
 
-    /// Checks if a position is within the current octree bounds.
+    /// Checks if (x,y,z) is within [-size/2..+size/2].
     pub fn contains(&self, x: f32, y: f32, z: f32) -> bool {
         let half_size = self.size / 2.0;
-        let epsilon = 1e-6; // Epsilon for floating-point precision
-
-        (x >= -half_size - epsilon && x < half_size + epsilon) &&
-            (y >= -half_size - epsilon && y < half_size + epsilon) &&
-            (z >= -half_size - epsilon && z < half_size + epsilon)
+        let eps = 1e-6;
+        (x >= -half_size - eps && x < half_size + eps)
+            && (y >= -half_size - eps && y < half_size + eps)
+            && (z >= -half_size - eps && z < half_size + eps)
     }
 
-    pub fn get_voxel_at_world_coords(&self, world_x: f32, world_y: f32, world_z: f32) -> Option<&Voxel> {
-        // Correct normalization: calculate the position relative to the octree's center
-        let normalized_x = (world_x + (self.size / 2.0)) / self.size;
-        let normalized_y = (world_y + (self.size / 2.0)) / self.size;
-        let normalized_z = (world_z + (self.size / 2.0)) / self.size;
-
-        self.get_voxel_at(normalized_x, normalized_y, normalized_z)
+    /// Retrieve a voxel at world coordinates by normalizing and looking up.
+    pub fn get_voxel_at_world_coords(&self, position: Vec3) -> Option<&Voxel> {
+        let aligned = self.normalize_to_voxel_at_depth(position, self.max_depth);
+        self.get_voxel_at(aligned.x, aligned.y, aligned.z)
     }
-    
 
-    pub fn has_volume(&self, node: &OctreeNode) -> bool {
-        // Check if this node is a leaf with a voxel
-        if node.is_leaf && node.voxel.is_some() {
-            return true;
-        }
-
-        // If the node has children, recursively check them
-        if let Some(children) = &node.children {
-            for child in children.iter() {
-                if self.has_volume(child) {
-                    return true; // If any child has a voxel, the chunk has volume
-                }
-            }
-        }
-
-        // If no voxel found in this node or its children
-        false
+    pub fn local_to_world(&self, local_pos: Vec3) -> Vec3 {
+        // Half the total octree size, used to shift the center to the origin.
+        let half_size = self.size * 0.5;
+        // Convert local coordinate to world space:
+        // 1. Subtract 0.5 to center the coordinate at zero (range becomes [-0.5, 0.5])
+        // 2. Multiply by the total size to scale into world units.
+        // 3. Add half_size to shift from a center–based system to one starting at zero.
+        (local_pos - Vec3::splat(0.5)) * self.size + Vec3::splat(half_size)
     }
-    
+
+
 
     /// Helper function to recursively traverse the octree to a specific depth.
     fn get_node_at_depth(
@@ -184,6 +175,26 @@ impl SparseVoxelOctree {
             None // Node has no children at this depth
         }
     }
+
+    pub fn has_volume(&self, node: &OctreeNode) -> bool {
+        // Check if this node is a leaf with a voxel
+        if node.is_leaf && node.voxel.is_some() {
+            return true;
+        }
+
+        // If the node has children, recursively check them
+        if let Some(children) = &node.children {
+            for child in children.iter() {
+                if self.has_volume(child) {
+                    return true; // If any child has a voxel, the chunk has volume
+                }
+            }
+        }
+
+        // If no voxel found in this node or its children
+        false
+    }
+
 
 
 }
